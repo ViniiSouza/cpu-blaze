@@ -1,10 +1,13 @@
-#include <stdio.h>    // Para entrada/saída (ex.: printf para mostrar mensagens no console)
-#include <stdlib.h>   // Para funções como malloc (alocar memória), atoi (string para inteiro), atof (string para double)
-#include <string.h>   // Para manipular strings (ex.: strcmp para comparar, strtok para dividir)
-#include <signal.h>   // Para capturar Ctrl+C (sinal SIGINT)
-#include <windows.h>  // Biblioteca do Windows para threads, afinidade e sleep
+#include <stdio.h>      // Para entrada/saída (ex.: printf)
+#include <stdlib.h>     // Para malloc, atoi, atof
+#include <string.h>     // Para manipular strings (strcmp, strtok)
+#include <signal.h>     // Para capturar Ctrl+C (SIGINT)
+#include <pthread.h>    // Para threads POSIX
+#include <unistd.h>     // Para sysconf (número de núcleos) e sleep
+#include <time.h>       // Para nanosleep e clock_gettime
 
-// Variável global para controlar se o programa deve continuar rodando
+// Variável global para controlar o loop de estresse
+// 'volatile' evita otimizações, 'sig_atomic_t' é seguro para sinais
 volatile sig_atomic_t running = 1;
 
 // Função que lida com Ctrl+C
@@ -12,136 +15,111 @@ void handle_sigint(int sig) {
     running = 0;
 }
 
+// Estrutura para argumentos da thread
 typedef struct {
-    int core_id;    // ID do núcleo
+    int core_id;    // ID do núcleo (usado para identificação no modo single)
     int percent;    // Porcentagem de uso da CPU
     int mode_multi; // 0 = single (uma thread por núcleo), 1 = multi (uma thread em múltiplos núcleos)
-    int* core_ids;  // Array de IDs dos núcleos (usado apenas no modo multi)
-    int num_cores;  // Número de núcleos (usado no modo multi)
+    int* core_ids;  // Array de IDs dos núcleos (modo multi)
+    int num_cores;  // Número de núcleos (modo multi)
 } ThreadArg;
 
-// Função que estressa a CPU (executada por cada thread)
-DWORD WINAPI blaze_thread(LPVOID arg) {
-    // Converte o argumento genérico (void*) para nossa estrutura
+// Função de estresse da CPU
+void* burn_thread(void* arg) {
     ThreadArg* t_arg = (ThreadArg*)arg;
-    int core_id = t_arg->core_id;
     int percent = t_arg->percent;
-    int mode_multi = t_arg->mode_multi;
-    int* core_ids = t_arg->core_ids;
-    int num_cores = t_arg->num_cores;
 
-    // Configurar afinidade (especifica em qual núcleo a thread pode rodar)
-    DWORD_PTR affinity_mask = 0;
-    if (mode_multi) {
-        // Modo multi: combinar todos os núcleos na máscara
-        // Ex.: para núcleos 0 e 1, affinity_mask = 00000011 (em binário)
-        for (int i = 0; i < num_cores; i++) {
-            affinity_mask |= 1ULL << core_ids[i]; // Operador '|' junta os bits
-        }
-    } else {
-        // Modo single: usar apenas o núcleo especificado
-        affinity_mask = 1ULL << core_id; // Ex.: núcleo 0 = 00000001
-    }
-    // Aplica a máscara à thread atual
-    if (!SetThreadAffinityMask(GetCurrentThread(), affinity_mask)) {
-        printf("Erro ao definir afinidade para núcleo %d\n", core_id);
-        return 1;
-    }
+    // No macOS, não definimos afinidade explícita (nem no modo single nem multi)
+    // O scheduler do macOS gerencia a distribuição das threads entre os núcleos
+    // No modo single, criamos uma thread por núcleo; no modo multi, uma thread para todos
 
-    // Variável para acumular cálculos (evita otimizações do compilador)
     unsigned long long result = 0;
-    // Obtém a frequência do contador de alta precisão (para medir tempo)
-    LARGE_INTEGER freq;
-    QueryPerformanceFrequency(&freq);
-
-    // Loop principal de estresse
     while (running) {
-        LARGE_INTEGER start, end;
-        QueryPerformanceCounter(&start); // Marca o tempo inicial
+        struct timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC, &start); // Marca o tempo inicial
 
-        // Ciclo de 100ms para controlar a porcentagem
-        double cycle_ms = 100.0; // Duração do ciclo (0.1s)
-        double work_ms = (percent / 100.0) * cycle_ms; // Tempo de trabalho (ex.: 50ms para 50%)
-        double elapsed_ms = 0.0; // Tempo gasto no trabalho
+        double cycle_ms = 100.0; // Ciclo de 100ms
+        double work_ms = (percent / 100.0) * cycle_ms; // Tempo de trabalho
+        double elapsed_ms = 0.0;
 
-        // Loop interno: faz cálculos até atingir work_ms
+        // Loop interno: estressa até atingir work_ms
         while (running && elapsed_ms < work_ms) {
-            // Assembly inline para estressar a CPU
-#if defined(_M_X64) || defined(__x86_64__)
-            // x86_64: usa registrador rax (64 bits)
+#if defined(__x86_64__)
+            // x86_64 (Mac Intel)
             __asm__ volatile (
-                "movq $1, %%rax\n"      // Coloca 1 em rax
-                "imulq $2, %%rax\n"     // Multiplica rax por 2
-                "addq %%rax, %0"        // Adiciona rax à variável result
-                : "+r" (result)         // Output: result é modificado
-                :                       // Input: nenhum
-                : "rax"                 // Clobbers: rax é usado
+                "movq $1, %%rax\n"
+                "imulq $2, %%rax\n"
+                "addq %%rax, %0"
+                : "+r" (result)
+                :
+                : "rax"
             );
-#elif defined(_M_ARM64) || defined(__aarch64__)
-            // ARM64: usa registradores x0, x1
+#elif defined(__aarch64__)
+            // ARM64 (Apple Silicon)
             __asm__ volatile (
-                "mov x0, #1\n"          // Coloca 1 em x0
-                "mov x1, #2\n"          // Coloca 2 em x1
-                "mul x0, x0, x1\n"      // Multiplica x0 por x1
-                "add %0, %0, x0"        // Adiciona x0 a result
+                "mov x0, #1\n"
+                "mov x1, #2\n"
+                "mul x0, x0, x1\n"
+                "add %0, %0, x0"
                 : "+r" (result)
                 :
                 : "x0", "x1"
             );
 #else
-            // Fallback em C puro se a arquitetura não for suportada
-            result += 1 * 2;
+            result += 1 * 2; // Fallback
 #endif
-            QueryPerformanceCounter(&end); // Marca o tempo final
-            // Calcula tempo decorrido em milissegundos
-            elapsed_ms = ((end.QuadPart - start.QuadPart) * 1000.0) / freq.QuadPart;
+            clock_gettime(CLOCK_MONOTONIC, &end);
+            elapsed_ms = (end.tv_sec - start.tv_sec) * 1000.0 + 
+                        (end.tv_nsec - start.tv_nsec) / 1000000.0;
         }
 
-        // Sleep pelo resto do ciclo (ex.: 50ms para 50% em 100ms)
+        // Sleep pelo resto do ciclo
         double sleep_ms = cycle_ms - elapsed_ms;
         if (sleep_ms > 0) {
-            Sleep((DWORD)sleep_ms);
+            struct timespec ts = {0, (long)(sleep_ms * 1000000)};
+            nanosleep(&ts, NULL);
         }
     }
-    return 0;
+    return NULL;
 }
 
-// Função para o timer (para o programa após o tempo especificado)
-DWORD WINAPI timer_thread(LPVOID arg) {
-    double time_min = *(double*)arg; // Tempo em minutos
-    Sleep((DWORD)(time_min * 60 * 1000)); // Converte para milissegundos
+// Função para o timer
+void* timer_thread(void* arg) {
+    double time_min = *(double*)arg;
+    long seconds = (long)(time_min * 60);
+    long nanos = (long)((time_min * 60 - seconds) * 1000000000);
+    struct timespec ts = {seconds, nanos};
+    nanosleep(&ts, NULL);
     running = 0;
-    return 0;
+    return NULL;
 }
 
 int main(int argc, char* argv[]) {
-    // Configura o manipulador de Ctrl+C
     signal(SIGINT, handle_sigint);
 
     // Valores padrão
-    int* cores = NULL;       // Array para IDs dos núcleos
-    int num_cores = 0;       // Número de núcleos selecionados
-    double time_min = 1.0;   // Tempo em minutos (suporta decimais)
-    int percent = 100;       // Porcentagem padrão (100%)
-    int mode_multi = 0;      // 0 = single, 1 = multi
+    int* cores = NULL;
+    int num_cores = 0;
+    double time_min = 1.0;
+    int percent = 100;
+    int mode_multi = 0;
 
-    // Parsear argumentos da linha de comando
-    // Ex.: "cpu_blaze.exe -c 0,1 -t 0.5 -p 80 -m single"
+    // Parsear argumentos
     for (int i = 1; i < argc; i += 2) {
         if (i + 1 >= argc) {
             printf("Erro: argumento %s precisa de valor\n", argv[i]);
             return 1;
         }
         if (strcmp(argv[i], "-c") == 0) {
-            char* token = strtok(argv[i + 1], ","); // Divide "0,1" em "0", "1"
-            cores = malloc(sizeof(int) * 64); // Aloca memória para até 64 núcleos
+            char* token = strtok(argv[i + 1], ",");
+            cores = malloc(sizeof(int) * 64);
             while (token) {
-                int core = atoi(token); // Converte string para inteiro
+                int core = atoi(token);
                 if (core >= 0) cores[num_cores++] = core;
                 token = strtok(NULL, ",");
             }
         } else if (strcmp(argv[i], "-t") == 0) {
-            time_min = atof(argv[i + 1]); // Converte para double (ex.: 0.5)
+            time_min = atof(argv[i + 1]);
             if (time_min <= 0) time_min = 1.0;
         } else if (strcmp(argv[i], "-p") == 0) {
             percent = atoi(argv[i + 1]);
@@ -156,61 +134,62 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Se nenhum núcleo for especificado, usar todos
+    // Default: todos os núcleos
     if (num_cores == 0) {
-        SYSTEM_INFO sysinfo;
-        GetSystemInfo(&sysinfo); // Obtém número de núcleos
-        num_cores = sysinfo.dwNumberOfProcessors;
+        num_cores = sysconf(_SC_NPROCESSORS_ONLN);
         cores = malloc(sizeof(int) * num_cores);
         for (int i = 0; i < num_cores; i++) cores[i] = i;
     }
 
     // Validar núcleos
-    SYSTEM_INFO sysinfo;
-    GetSystemInfo(&sysinfo);
+    int max_cores = sysconf(_SC_NPROCESSORS_ONLN);
     for (int i = 0; i < num_cores; i++) {
-        if (cores[i] >= (int)sysinfo.dwNumberOfProcessors) {
-            printf("Erro: núcleo %d inválido (máximo: %d)\n", cores[i], sysinfo.dwNumberOfProcessors - 1);
+        if (cores[i] >= max_cores) {
+            printf("Erro: núcleo %d inválido (máximo: %d)\n", cores[i], max_cores - 1);
             free(cores);
             return 1;
         }
     }
 
-    // Exibir configuração
-    printf("Iniciando CPU blaze: %d núcleos, %.2f minutos, %d%% uso, modo %s. Pressione Ctrl+C para parar.\n",
+    // Aviso sobre afinidade no macOS
+    if (!mode_multi) {
+        printf("Nota: No macOS, a afinidade de núcleos não é garantida. O sistema distribuirá as threads.\n");
+    }
+
+    printf("Iniciando CPU burn: %d núcleos, %.2f minutos, %d%% uso, modo %s. Pressione Ctrl+C para parar.\n",
            num_cores, time_min, percent, mode_multi ? "multi" : "single");
 
     // Criar threads
-    int num_threads = mode_multi ? 1 : num_cores; // Uma thread para multi, uma por núcleo para single
-    HANDLE* threads = malloc(sizeof(HANDLE) * num_threads);
+    int num_threads = mode_multi ? 1 : num_cores;
+    pthread_t* threads = malloc(sizeof(pthread_t) * num_threads);
     ThreadArg* args = malloc(sizeof(ThreadArg) * num_threads);
 
     for (int i = 0; i < num_threads; i++) {
-        args[i].core_id = mode_multi ? 0 : cores[i]; // No modo single, cada thread usa um núcleo
+        args[i].core_id = mode_multi ? 0 : cores[i];
         args[i].percent = percent;
         args[i].mode_multi = mode_multi;
-        args[i].core_ids = cores; // Para modo multi
+        args[i].core_ids = cores;
         args[i].num_cores = num_cores;
-        threads[i] = CreateThread(NULL, 0, blaze_thread, &args[i], 0, NULL);
-        if (threads[i] == NULL) {
+        if (pthread_create(&threads[i], NULL, burn_thread, &args[i]) != 0) {
             printf("Erro ao criar thread %d\n", i);
         }
     }
 
     // Thread timer
-    HANDLE timer = CreateThread(NULL, 0, timer_thread, &time_min, 0, NULL);
+    pthread_t timer;
+    pthread_create(&timer, NULL, timer_thread, &time_min);
 
     // Aguardar threads
-    WaitForMultipleObjects(num_threads, threads, TRUE, INFINITE);
-    WaitForSingleObject(timer, INFINITE);
+    for (int i = 0; i < num_threads; i++) {
+        pthread_join(threads[i], NULL);
+    }
+    pthread_join(timer, NULL);
 
     // Liberar recursos
-    for (int i = 0; i < num_threads; i++) CloseHandle(threads[i]);
-    CloseHandle(timer);
     free(threads);
     free(args);
     free(cores);
 
-    printf("CPU blaze encerrado.\n");
+    printf("CPU burn encerrado.\n");
     return 0;
 }
