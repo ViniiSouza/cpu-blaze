@@ -1,110 +1,161 @@
-#include <stdio.h>      // Para entrada/saída (ex.: printf)
-#include <stdlib.h>     // Para malloc, atoi, atof
-#include <string.h>     // Para manipular strings (strcmp, strtok)
-#include <signal.h>     // Para capturar Ctrl+C (SIGINT)
-#include <pthread.h>    // Para threads POSIX
-#include <unistd.h>     // Para sysconf (número de núcleos) e sleep
-#include <time.h>       // Para nanosleep e clock_gettime
+#define _GNU_SOURCE
+#include <stdio.h> // para entrada/saída (ex.: printf)
+#include <stdlib.h> // para malloc, atoi, atof
+#include <string.h> // para manipular strings (strcmp, strtok)
+#include <time.h> // para nanosleep e clock_gettime
 
-// Variável global para controlar o loop de estresse
-// 'volatile' evita otimizações, 'sig_atomic_t' é seguro para sinais
-volatile sig_atomic_t running = 1;
+#ifdef _WIN32
+    #include <windows.h> // para threads e manipulação de eventos
+    #include <process.h> // para CreateThread
+    #include <io.h>
+    typedef HANDLE thread_t;
+    typedef DWORD thread_return_t;
+    volatile int running = 1;
+    
+    BOOL WINAPI handle_ctrl_c(DWORD ctrl_type) {
+        if (ctrl_type == CTRL_C_EVENT) {
+            running = 0;
+            return TRUE;
+        }
+        return FALSE;
+    }
+#else
+    #include <signal.h>
+    #include <pthread.h>
+    #include <unistd.h>
+    #include <time.h>
+    typedef pthread_t thread_t;
+    typedef void* thread_return_t;
+    volatile sig_atomic_t running = 1;
+    
+    void handle_sigint(int sig) {
+        running = 0;
+    }
+#endif
 
-// Função que lida com Ctrl+C
-void handle_sigint(int sig) {
-    running = 0;
-}
-
-// Estrutura para argumentos da thread
 typedef struct {
-    int core_id;    // ID do núcleo (usado para identificação no modo single)
-    int percent;    // Porcentagem de uso da CPU
-    int mode_multi; // 0 = single (uma thread por núcleo), 1 = multi (uma thread em múltiplos núcleos)
-    int* core_ids;  // Array de IDs dos núcleos (modo multi)
-    int num_cores;  // Número de núcleos (modo multi)
+    int core_id;
+    int percent;
+    int mode_multi;
+    int* core_ids;
+    int num_cores;
 } ThreadArg;
 
-// Função de estresse da CPU
-void* burn_thread(void* arg) {
-    ThreadArg* t_arg = (ThreadArg*)arg;
-    int percent = t_arg->percent;
-
-    // No macOS, não definimos afinidade explícita (nem no modo single nem multi)
-    // O scheduler do macOS gerencia a distribuição das threads entre os núcleos
-    // No modo single, criamos uma thread por núcleo; no modo multi, uma thread para todos
-
-    unsigned long long result = 0;
-    while (running) {
-        struct timespec start, end;
-        clock_gettime(CLOCK_MONOTONIC, &start); // Marca o tempo inicial
-
-        double cycle_ms = 100.0; // Ciclo de 100ms
-        double work_ms = (percent / 100.0) * cycle_ms; // Tempo de trabalho
-        double elapsed_ms = 0.0;
-
-        // Loop interno: estressa até atingir work_ms
-        while (running && elapsed_ms < work_ms) {
-#if defined(__x86_64__)
-            // x86_64 (Mac Intel)
-            __asm__ volatile (
-                "movq $1, %%rax\n"
-                "imulq $2, %%rax\n"
-                "addq %%rax, %0"
-                : "+r" (result)
-                :
-                : "rax"
-            );
-#elif defined(__aarch64__)
-            // ARM64 (Apple Silicon)
-            __asm__ volatile (
-                "mov x0, #1\n"
-                "mov x1, #2\n"
-                "mul x0, x0, x1\n"
-                "add %0, %0, x0"
-                : "+r" (result)
-                :
-                : "x0", "x1"
-            );
-#else
-            result += 1 * 2; // Fallback
-#endif
-            clock_gettime(CLOCK_MONOTONIC, &end);
-            elapsed_ms = (end.tv_sec - start.tv_sec) * 1000.0 + 
-                        (end.tv_nsec - start.tv_nsec) / 1000000.0;
+#ifdef _WIN32
+    DWORD WINAPI burn_thread(LPVOID arg) {
+        ThreadArg* t_arg = (ThreadArg*)arg;
+        int percent = t_arg->percent;
+        unsigned long long result = 0;
+        
+        while (running) {
+            LARGE_INTEGER freq, start, end;
+            QueryPerformanceFrequency(&freq);
+            QueryPerformanceCounter(&start);
+            
+            double cycle_ms = 100.0;
+            double work_ms = (percent / 100.0) * cycle_ms;
+            double elapsed_ms = 0.0;
+            
+            while (running && elapsed_ms < work_ms) {
+                for (int i = 0; i < 1000; i++) {
+                    result += 1 * 2;
+                }
+                QueryPerformanceCounter(&end);
+                elapsed_ms = ((double)(end.QuadPart - start.QuadPart) / freq.QuadPart) * 1000.0;
+            }
+            
+            double sleep_ms = cycle_ms - elapsed_ms;
+            if (sleep_ms > 0) {
+                Sleep((DWORD)sleep_ms);
+            }
         }
-
-        // Sleep pelo resto do ciclo
-        double sleep_ms = cycle_ms - elapsed_ms;
-        if (sleep_ms > 0) {
-            struct timespec ts = {0, (long)(sleep_ms * 1000000)};
-            nanosleep(&ts, NULL);
-        }
+        return 0;
     }
-    return NULL;
-}
+#else
+    void* burn_thread(void* arg) {
+        ThreadArg* t_arg = (ThreadArg*)arg;
+        int percent = t_arg->percent;
+        unsigned long long result = 0;
+        
+        while (running) {
+            struct timespec start, end;
+            clock_gettime(CLOCK_MONOTONIC, &start);
+            
+            double cycle_ms = 100.0;
+            double work_ms = (percent / 100.0) * cycle_ms;
+            double elapsed_ms = 0.0;
+            
+            while (running && elapsed_ms < work_ms) {
+#if defined(__x86_64__)
+                __asm__ volatile (
+                    "movq $1, %%rax\n"
+                    "imulq $2, %%rax\n"
+                    "addq %%rax, %0"
+                    : "+r" (result)
+                    :
+                    : "rax"
+                );
+#elif defined(__aarch64__)
+                __asm__ volatile (
+                    "mov x0, #1\n"
+                    "mov x1, #2\n"
+                    "mul x0, x0, x1\n"
+                    "add %0, %0, x0"
+                    : "+r" (result)
+                    :
+                    : "x0", "x1"
+                );
+#else
+                result += 1 * 2;
+#endif
+                clock_gettime(CLOCK_MONOTONIC, &end);
+                elapsed_ms = (end.tv_sec - start.tv_sec) * 1000.0 + 
+                            (end.tv_nsec - start.tv_nsec) / 1000000.0;
+            }
+            
+            double sleep_ms = cycle_ms - elapsed_ms;
+            if (sleep_ms > 0) {
+                struct timespec ts = {0, (long)(sleep_ms * 1000000)};
+                nanosleep(&ts, NULL);
+            }
+        }
+        return NULL;
+    }
+#endif
 
-// Função para o timer
-void* timer_thread(void* arg) {
-    double time_min = *(double*)arg;
-    long seconds = (long)(time_min * 60);
-    long nanos = (long)((time_min * 60 - seconds) * 1000000000);
-    struct timespec ts = {seconds, nanos};
-    nanosleep(&ts, NULL);
-    running = 0;
-    return NULL;
-}
+#ifdef _WIN32
+    DWORD WINAPI timer_thread(LPVOID arg) {
+        double time_min = *(double*)arg;
+        DWORD sleep_ms = (DWORD)(time_min * 60 * 1000);
+        Sleep(sleep_ms);
+        running = 0;
+        return 0;
+    }
+#else
+    void* timer_thread(void* arg) {
+        double time_min = *(double*)arg;
+        long seconds = (long)(time_min * 60);
+        long nanos = (long)((time_min * 60 - seconds) * 1000000000);
+        struct timespec ts = {seconds, nanos};
+        nanosleep(&ts, NULL);
+        running = 0;
+        return NULL;
+    }
+#endif
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    SetConsoleCtrlHandler(handle_ctrl_c, TRUE);
+#else
     signal(SIGINT, handle_sigint);
+#endif
 
-    // Valores padrão
     int* cores = NULL;
     int num_cores = 0;
     double time_min = 1.0;
     int percent = 100;
     int mode_multi = 0;
 
-    // Parsear argumentos
     for (int i = 1; i < argc; i += 2) {
         if (i + 1 >= argc) {
             printf("Erro: argumento %s precisa de valor\n", argv[i]);
@@ -134,15 +185,20 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Default: todos os núcleos
+#ifdef _WIN32
+    SYSTEM_INFO sysInfo;
+    GetSystemInfo(&sysInfo);
+    int max_cores = sysInfo.dwNumberOfProcessors;
+#else
+    int max_cores = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+
     if (num_cores == 0) {
-        num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+        num_cores = max_cores;
         cores = malloc(sizeof(int) * num_cores);
         for (int i = 0; i < num_cores; i++) cores[i] = i;
     }
 
-    // Validar núcleos
-    int max_cores = sysconf(_SC_NPROCESSORS_ONLN);
     for (int i = 0; i < num_cores; i++) {
         if (cores[i] >= max_cores) {
             printf("Erro: núcleo %d inválido (máximo: %d)\n", cores[i], max_cores - 1);
@@ -151,41 +207,113 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Aviso sobre afinidade no macOS
+#ifndef _WIN32
     if (!mode_multi) {
         printf("Nota: No macOS, a afinidade de núcleos não é garantida. O sistema distribuirá as threads.\n");
     }
+#endif
 
     printf("Iniciando CPU burn: %d núcleos, %.2f minutos, %d%% uso, modo %s. Pressione Ctrl+C para parar.\n",
            num_cores, time_min, percent, mode_multi ? "multi" : "single");
 
-    // Criar threads
-    int num_threads = mode_multi ? 1 : num_cores;
+    int num_threads = num_cores;
+#ifdef _WIN32
+    HANDLE* threads = malloc(sizeof(HANDLE) * num_threads);
+#else
     pthread_t* threads = malloc(sizeof(pthread_t) * num_threads);
+#endif
     ThreadArg* args = malloc(sizeof(ThreadArg) * num_threads);
 
+    int thread_percent = mode_multi ? (percent / num_cores) : percent;
+
     for (int i = 0; i < num_threads; i++) {
-        args[i].core_id = mode_multi ? 0 : cores[i];
-        args[i].percent = percent;
+        args[i].core_id = cores[i];
+        args[i].percent = thread_percent;
         args[i].mode_multi = mode_multi;
         args[i].core_ids = cores;
         args[i].num_cores = num_cores;
+#ifdef _WIN32
+        threads[i] = CreateThread(NULL, 0, burn_thread, &args[i], 0, NULL);
+        if (!mode_multi) {
+            DWORD_PTR mask = (DWORD_PTR)(1ULL << cores[i]);
+            SetThreadAffinityMask(threads[i], mask);
+        } else {
+            DWORD_PTR mask = 0;
+            for (int j = 0; j < num_cores; j++) {
+                mask |= (DWORD_PTR)(1ULL << cores[j]);
+            }
+            SetThreadAffinityMask(threads[i], mask);
+        }
+#else
         if (pthread_create(&threads[i], NULL, burn_thread, &args[i]) != 0) {
             printf("Erro ao criar thread %d\n", i);
         }
+        if (!mode_multi) {
+            cpu_set_t cpuset;
+            CPU_ZERO(&cpuset);
+            CPU_SET(cores[i], &cpuset);
+            pthread_setaffinity_np(threads[i], sizeof(cpuset), &cpuset);
+        } else {
+            cpu_set_t cpuset;
+            CPU_ZERO(&cpuset);
+            for (int j = 0; j < num_cores; j++) {
+                CPU_SET(cores[j], &cpuset);
+            }
+            pthread_setaffinity_np(threads[i], sizeof(cpuset), &cpuset);
+        }
+#endif
     }
 
-    // Thread timer
+#ifdef _WIN32
+    HANDLE timer = CreateThread(NULL, 0, timer_thread, &time_min, 0, NULL);
+    HANDLE* all_handles = malloc(sizeof(HANDLE) * (num_threads + 1));
+    for (int i = 0; i < num_threads; i++) all_handles[i] = threads[i];
+    all_handles[num_threads] = timer;
+    
+    while (running) {
+        DWORD result = WaitForMultipleObjects(num_threads + 1, all_handles, FALSE, 100);
+        if (result >= WAIT_OBJECT_0 && result < WAIT_OBJECT_0 + num_threads) {
+            break;
+        }
+        if (!running) break;
+    }
+    
+    for (int i = 0; i < num_threads; i++) {
+        if (threads[i]) {
+            TerminateThread(threads[i], 0);
+            CloseHandle(threads[i]);
+        }
+    }
+    if (timer) {
+        TerminateThread(timer, 0);
+        CloseHandle(timer);
+    }
+    free(all_handles);
+#else
     pthread_t timer;
     pthread_create(&timer, NULL, timer_thread, &time_min);
-
-    // Aguardar threads
+    
+    void* retval;
+    while (running) {
+        int finished = 1;
+        for (int i = 0; i < num_threads; i++) {
+            if (pthread_tryjoin_np(threads[i], &retval) != 0) {
+                finished = 0;
+                break;
+            }
+        }
+        if (finished) break;
+        usleep(100000);
+    }
+    
     for (int i = 0; i < num_threads; i++) {
+        if (!running) pthread_cancel(threads[i]);
         pthread_join(threads[i], NULL);
     }
+    if (timer) pthread_cancel(timer);
     pthread_join(timer, NULL);
+#endif
 
-    // Liberar recursos
     free(threads);
     free(args);
     free(cores);
