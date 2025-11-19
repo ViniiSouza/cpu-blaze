@@ -39,7 +39,27 @@ typedef struct {
     int mode_multi;
     int* core_ids;
     int num_cores;
+    int rotation_enabled;
+    int rotation_seconds;
 } ThreadArg;
+
+#ifdef _WIN32
+typedef struct {
+    HANDLE* threads;
+    int* core_ids;
+    int num_threads;
+    int num_cores;
+    int rotation_seconds;
+} RotationArg;
+#else
+typedef struct {
+    pthread_t* threads;
+    int* core_ids;
+    int num_threads;
+    int num_cores;
+    int rotation_seconds;
+} RotationArg;
+#endif
 
 #ifdef _WIN32
     DWORD WINAPI burn_thread(LPVOID arg) {
@@ -131,6 +151,29 @@ typedef struct {
         running = 0;
         return 0;
     }
+
+    DWORD WINAPI rotation_thread(LPVOID arg) {
+        RotationArg* rot_arg = (RotationArg*)arg;
+        int current_core_index = 0;
+        
+        while (running) {
+            Sleep(rot_arg->rotation_seconds * 1000);
+            if (!running) break;
+            
+            // Rotaciona para o próximo núcleo
+            int target_core = rot_arg->core_ids[current_core_index];
+            
+            for (int i = 0; i < rot_arg->num_threads; i++) {
+                if (rot_arg->threads[i]) {
+                    DWORD_PTR mask = (DWORD_PTR)(1ULL << target_core);
+                    SetThreadAffinityMask(rot_arg->threads[i], mask);
+                }
+            }
+            
+            current_core_index = (current_core_index + 1) % rot_arg->num_cores;
+        }
+        return 0;
+    }
 #else
     void* timer_thread(void* arg) {
         double time_min = *(double*)arg;
@@ -139,6 +182,30 @@ typedef struct {
         struct timespec ts = {seconds, nanos};
         nanosleep(&ts, NULL);
         running = 0;
+        return NULL;
+    }
+
+    void* rotation_thread(void* arg) {
+        RotationArg* rot_arg = (RotationArg*)arg;
+        int current_core_index = 0;
+        
+        while (running) {
+            struct timespec ts = {rot_arg->rotation_seconds, 0};
+            nanosleep(&ts, NULL);
+            if (!running) break;
+            
+            // Rotaciona para o próximo núcleo
+            int target_core = rot_arg->core_ids[current_core_index];
+            
+            for (int i = 0; i < rot_arg->num_threads; i++) {
+                cpu_set_t cpuset;
+                CPU_ZERO(&cpuset);
+                CPU_SET(target_core, &cpuset);
+                pthread_setaffinity_np(rot_arg->threads[i], sizeof(cpuset), &cpuset);
+            }
+            
+            current_core_index = (current_core_index + 1) % rot_arg->num_cores;
+        }
         return NULL;
     }
 #endif
@@ -155,6 +222,7 @@ int main(int argc, char* argv[]) {
     double time_min = 1.0;
     int percent = 100;
     int mode_multi = 0;
+    int rotation_seconds = 0;
 
     for (int i = 1; i < argc; i += 2) {
         if (i + 1 >= argc) {
@@ -182,6 +250,9 @@ int main(int argc, char* argv[]) {
                 printf("Erro: modo inválido (%s). Use 'single' ou 'multi'.\n", argv[i + 1]);
                 return 1;
             }
+        } else if (strcmp(argv[i], "-r") == 0) {
+            rotation_seconds = atoi(argv[i + 1]);
+            if (rotation_seconds < 0) rotation_seconds = 0;
         }
     }
 
@@ -213,8 +284,12 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
-    printf("Iniciando CPU burn: %d núcleos, %.2f minutos, %d%% uso, modo %s. Pressione Ctrl+C para parar.\n",
+    printf("Iniciando CPU burn: %d núcleos, %.2f minutos, %d%% uso, modo %s", 
            num_cores, time_min, percent, mode_multi ? "multi" : "single");
+    if (rotation_seconds > 0) {
+        printf(", rotação a cada %d segundos", rotation_seconds);
+    }
+    printf(". Pressione Ctrl+C para parar.\n");
 
     int num_threads = num_cores;
 #ifdef _WIN32
@@ -232,9 +307,16 @@ int main(int argc, char* argv[]) {
         args[i].mode_multi = mode_multi;
         args[i].core_ids = cores;
         args[i].num_cores = num_cores;
+        args[i].rotation_enabled = (rotation_seconds > 0) ? 1 : 0;
+        args[i].rotation_seconds = rotation_seconds;
 #ifdef _WIN32
         threads[i] = CreateThread(NULL, 0, burn_thread, &args[i], 0, NULL);
-        if (!mode_multi) {
+        if (rotation_seconds > 0) {
+            // Com rotação, definir afinidade inicial para o primeiro núcleo
+            // A thread de rotação vai mudar depois
+            DWORD_PTR mask = (DWORD_PTR)(1ULL << cores[0]);
+            SetThreadAffinityMask(threads[i], mask);
+        } else if (!mode_multi) {
             DWORD_PTR mask = (DWORD_PTR)(1ULL << cores[i]);
             SetThreadAffinityMask(threads[i], mask);
         } else {
@@ -248,7 +330,14 @@ int main(int argc, char* argv[]) {
         if (pthread_create(&threads[i], NULL, burn_thread, &args[i]) != 0) {
             printf("Erro ao criar thread %d\n", i);
         }
-        if (!mode_multi) {
+        if (rotation_seconds > 0) {
+            // Com rotação, definir afinidade inicial para o primeiro núcleo
+            // A thread de rotação vai mudar depois
+            cpu_set_t cpuset;
+            CPU_ZERO(&cpuset);
+            CPU_SET(cores[0], &cpuset);
+            pthread_setaffinity_np(threads[i], sizeof(cpuset), &cpuset);
+        } else if (!mode_multi) {
             cpu_set_t cpuset;
             CPU_ZERO(&cpuset);
             CPU_SET(cores[i], &cpuset);
@@ -266,12 +355,26 @@ int main(int argc, char* argv[]) {
 
 #ifdef _WIN32
     HANDLE timer = CreateThread(NULL, 0, timer_thread, &time_min, 0, NULL);
-    HANDLE* all_handles = malloc(sizeof(HANDLE) * (num_threads + 1));
+    HANDLE rotation = NULL;
+    
+    // Criar thread de rotação se necessário
+    if (rotation_seconds > 0 && num_cores > 1) {
+        RotationArg rot_arg;
+        rot_arg.threads = threads;
+        rot_arg.core_ids = cores;
+        rot_arg.num_threads = num_threads;
+        rot_arg.num_cores = num_cores;
+        rot_arg.rotation_seconds = rotation_seconds;
+        rotation = CreateThread(NULL, 0, rotation_thread, &rot_arg, 0, NULL);
+    }
+    
+    HANDLE* all_handles = malloc(sizeof(HANDLE) * (num_threads + 1 + (rotation ? 1 : 0)));
     for (int i = 0; i < num_threads; i++) all_handles[i] = threads[i];
     all_handles[num_threads] = timer;
+    if (rotation) all_handles[num_threads + 1] = rotation;
     
     while (running) {
-        DWORD result = WaitForMultipleObjects(num_threads + 1, all_handles, FALSE, 100);
+        DWORD result = WaitForMultipleObjects(num_threads + 1 + (rotation ? 1 : 0), all_handles, FALSE, 100);
         if (result >= WAIT_OBJECT_0 && result < WAIT_OBJECT_0 + num_threads) {
             break;
         }
@@ -288,10 +391,30 @@ int main(int argc, char* argv[]) {
         TerminateThread(timer, 0);
         CloseHandle(timer);
     }
+    if (rotation) {
+        TerminateThread(rotation, 0);
+        CloseHandle(rotation);
+    }
     free(all_handles);
 #else
     pthread_t timer;
     pthread_create(&timer, NULL, timer_thread, &time_min);
+    
+    pthread_t rotation;
+    int rotation_created = 0;
+    
+    // Criar thread de rotação se necessário
+    if (rotation_seconds > 0 && num_cores > 1) {
+        RotationArg* rot_arg = malloc(sizeof(RotationArg));
+        rot_arg->threads = threads;
+        rot_arg->core_ids = cores;
+        rot_arg->num_threads = num_threads;
+        rot_arg->num_cores = num_cores;
+        rot_arg->rotation_seconds = rotation_seconds;
+        if (pthread_create(&rotation, NULL, rotation_thread, rot_arg) == 0) {
+            rotation_created = 1;
+        }
+    }
     
     void* retval;
     while (running) {
@@ -312,6 +435,10 @@ int main(int argc, char* argv[]) {
     }
     if (timer) pthread_cancel(timer);
     pthread_join(timer, NULL);
+    if (rotation_created) {
+        pthread_cancel(rotation);
+        pthread_join(rotation, NULL);
+    }
 #endif
 
     free(threads);
