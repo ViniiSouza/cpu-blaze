@@ -1,0 +1,72 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <CpuBlazeSourcePath>$(MSBuildProjectDirectory)\..\..\cpu_blaze.c</CpuBlazeSourcePath>
+    <CpuBlazeOutputPath>$(MSBuildProjectDirectory)\..\..\cpu_blaze_windows.exe</CpuBlazeOutputPath>
+  </PropertyGroup>
+
+  <Target Name="BuildCpuBlaze" BeforeTargets="BeforeBuild">
+    <Message Text="Verificando cpu_blaze.c..." Importance="normal" />
+    
+    <!-- Verificar se precisa compilar: se o executável não existe ou se forçado -->
+    <!-- Nota: Para forçar recompilação, use: dotnet build /p:ForceRebuildCpuBlaze=true -->
+    <PropertyGroup>
+      <CpuBlazeNeedsBuild Condition="!Exists('$(CpuBlazeOutputPath)')">true</CpuBlazeNeedsBuild>
+      <CpuBlazeNeedsBuild Condition="'$(ForceRebuildCpuBlaze)' == 'true'">true</CpuBlazeNeedsBuild>
+    </PropertyGroup>
+    
+    <!-- Mensagem informativa se o executável já existe -->
+    <Message Condition="Exists('$(CpuBlazeOutputPath)') AND '$(CpuBlazeNeedsBuild)' != 'true'" 
+             Text="cpu_blaze_windows.exe já existe. Use /p:ForceRebuildCpuBlaze=true para forçar recompilação." 
+             Importance="low" />
+
+    <!-- Tentar encontrar GCC -->
+    <Exec Command="where gcc" IgnoreExitCode="true" ContinueOnError="true" StandardOutputImportance="low">
+      <Output TaskParameter="ExitCode" PropertyName="GccFound" />
+    </Exec>
+
+    <PropertyGroup>
+      <GccAvailable Condition="'$(GccFound)' == '0'">true</GccAvailable>
+    </PropertyGroup>
+
+    <!-- Compilar se necessário -->
+    <Exec Condition="'$(CpuBlazeNeedsBuild)' == 'true' AND '$(GccAvailable)' == 'true'" 
+          Command="gcc &quot;$(CpuBlazeSourcePath)&quot; -o &quot;$(CpuBlazeOutputPath)&quot; -Wall" 
+          ContinueOnError="true"
+          WorkingDirectory="$(MSBuildProjectDirectory)\..\..">
+      <Output TaskParameter="ExitCode" PropertyName="CompileExitCode" />
+    </Exec>
+
+    <Warning Condition="'$(CpuBlazeNeedsBuild)' == 'true' AND '$(GccAvailable)' != 'true'" 
+             Text="GCC não encontrado. O executável cpu_blaze_windows.exe não será compilado automaticamente. Execute build_cpu_blaze.bat manualmente." />
+    
+    <Warning Condition="'$(CpuBlazeNeedsBuild)' == 'true' AND '$(GccAvailable)' == 'true' AND '$(CompileExitCode)' != '0'" 
+             Text="Falha ao compilar cpu_blaze.c. Verifique os erros acima." />
+    
+    <Message Condition="'$(CpuBlazeNeedsBuild)' == 'true' AND '$(GccAvailable)' == 'true' AND '$(CompileExitCode)' == '0'" 
+             Text="cpu_blaze_windows.exe compilado com sucesso!" Importance="high" />
+  </Target>
+
+  <Target Name="CopyCpuBlazeToOutput" AfterTargets="AfterBuild">
+    <Message Text="Copiando cpu_blaze_windows.exe para o diretório de output..." Importance="normal" />
+    
+    <PropertyGroup>
+      <CpuBlazeSource>$(MSBuildProjectDirectory)\..\..\cpu_blaze_windows.exe</CpuBlazeSource>
+      <CpuBlazeDestination>$(OutputPath)cpu_blaze_windows.exe</CpuBlazeDestination>
+    </PropertyGroup>
+
+    <Copy Condition="Exists('$(CpuBlazeSource)')" 
+          SourceFiles="$(CpuBlazeSource)" 
+          DestinationFiles="$(CpuBlazeDestination)" 
+          SkipUnchangedFiles="true" />
+    
+    <Warning Condition="!Exists('$(CpuBlazeSource)')" 
+             Text="cpu_blaze_windows.exe não encontrado. A aplicação pode não funcionar corretamente." />
+  </Target>
+
+</Project>
