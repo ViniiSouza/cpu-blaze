@@ -4,6 +4,20 @@
 #include <string.h> // para manipular strings (strcmp, strtok)
 #include <time.h> // para nanosleep e clock_gettime
 
+// Função auxiliar para converter string para double, suportando tanto vírgula quanto ponto
+double parse_double(const char* str) {
+    char* buffer = malloc(strlen(str) + 1);
+    strcpy(buffer, str);
+    for (int i = 0; buffer[i]; i++) {
+        if (buffer[i] == ',') {
+            buffer[i] = '.';
+        }
+    }
+    double result = atof(buffer);
+    free(buffer);
+    return result;
+}
+
 #ifdef _WIN32
     #include <windows.h> // para threads e manipulação de eventos
     #include <process.h> // para CreateThread
@@ -146,8 +160,15 @@ typedef struct {
 #ifdef _WIN32
     DWORD WINAPI timer_thread(LPVOID arg) {
         double time_min = *(double*)arg;
-        DWORD sleep_ms = (DWORD)(time_min * 60 * 1000);
-        Sleep(sleep_ms);
+        double total_ms_double = time_min * 60.0 * 1000.0;
+        DWORD total_ms = (DWORD)total_ms_double;
+        
+        if (total_ms == 0 && total_ms_double > 0.5) {
+            // Se arredondou para 0 mas deveria ser maior, usar pelo menos 1ms
+            total_ms = 1;
+        }
+        
+        Sleep(total_ms);
         running = 0;
         return 0;
     }
@@ -238,7 +259,7 @@ int main(int argc, char* argv[]) {
                 token = strtok(NULL, ",");
             }
         } else if (strcmp(argv[i], "-t") == 0) {
-            time_min = atof(argv[i + 1]);
+            time_min = parse_double(argv[i + 1]);
             if (time_min <= 0) time_min = 1.0;
         } else if (strcmp(argv[i], "-p") == 0) {
             percent = atoi(argv[i + 1]);
@@ -289,7 +310,7 @@ int main(int argc, char* argv[]) {
     if (rotation_seconds > 0) {
         printf(", rotação a cada %d segundos", rotation_seconds);
     }
-    printf(". Pressione Ctrl+C para parar.\n");
+    fflush(stdout); // Forçar a saída imediata da mensagem
 
     int num_threads = num_cores;
 #ifdef _WIN32
