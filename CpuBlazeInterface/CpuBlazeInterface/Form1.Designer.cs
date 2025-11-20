@@ -45,7 +45,6 @@
             numRotationSeconds = new NumericUpDown();
             btnStart = new Button();
             btnStop = new Button();
-            btnCompile = new Button();
             txtStatus = new RichTextBox();
             lblStatus = new Label();
             ((System.ComponentModel.ISupportInitialize)numPercent).BeginInit();
@@ -59,7 +58,7 @@
             lblTitle.Font = new Font("Segoe UI", 16F, FontStyle.Bold);
             lblTitle.Location = new Point(12, 9);
             lblTitle.Name = "lblTitle";
-            lblTitle.Size = new Size(130, 30);
+            lblTitle.Size = new Size(118, 30);
             lblTitle.TabIndex = 0;
             lblTitle.Text = "CPU Blaze";
             // 
@@ -68,7 +67,7 @@
             lblCoreSelection.AutoSize = true;
             lblCoreSelection.Location = new Point(12, 50);
             lblCoreSelection.Name = "lblCoreSelection";
-            lblCoreSelection.Size = new Size(108, 15);
+            lblCoreSelection.Size = new Size(112, 15);
             lblCoreSelection.TabIndex = 1;
             lblCoreSelection.Text = "Seleção de Núcleos:";
             // 
@@ -87,24 +86,24 @@
             lblSelectedCores.AutoSize = true;
             lblSelectedCores.Location = new Point(12, 104);
             lblSelectedCores.Name = "lblSelectedCores";
-            lblSelectedCores.Size = new Size(95, 15);
+            lblSelectedCores.Size = new Size(97, 15);
             lblSelectedCores.TabIndex = 3;
             lblSelectedCores.Text = "Núcleos (0,1,2...):";
             // 
             // txtSelectedCores
             // 
+            txtSelectedCores.Enabled = false;
             txtSelectedCores.Location = new Point(12, 122);
             txtSelectedCores.Name = "txtSelectedCores";
             txtSelectedCores.Size = new Size(200, 23);
             txtSelectedCores.TabIndex = 4;
-            txtSelectedCores.Enabled = false;
             // 
             // lblMode
             // 
             lblMode.AutoSize = true;
             lblMode.Location = new Point(12, 158);
             lblMode.Name = "lblMode";
-            lblMode.Size = new Size(40, 15);
+            lblMode.Size = new Size(42, 15);
             lblMode.TabIndex = 5;
             lblMode.Text = "Modo:";
             // 
@@ -114,7 +113,7 @@
             rbModeSingle.Checked = true;
             rbModeSingle.Location = new Point(12, 176);
             rbModeSingle.Name = "rbModeSingle";
-            rbModeSingle.Size = new Size(58, 19);
+            rbModeSingle.Size = new Size(57, 19);
             rbModeSingle.TabIndex = 6;
             rbModeSingle.TabStop = true;
             rbModeSingle.Text = "Single";
@@ -125,7 +124,7 @@
             rbModeMulti.AutoSize = true;
             rbModeMulti.Location = new Point(76, 176);
             rbModeMulti.Name = "rbModeMulti";
-            rbModeMulti.Size = new Size(57, 19);
+            rbModeMulti.Size = new Size(53, 19);
             rbModeMulti.TabIndex = 7;
             rbModeMulti.Text = "Multi";
             rbModeMulti.UseVisualStyleBackColor = true;
@@ -135,14 +134,13 @@
             lblPercent.AutoSize = true;
             lblPercent.Location = new Point(12, 208);
             lblPercent.Name = "lblPercent";
-            lblPercent.Size = new Size(125, 15);
+            lblPercent.Size = new Size(131, 15);
             lblPercent.TabIndex = 8;
             lblPercent.Text = "Porcentagem (0-100%):";
             // 
             // numPercent
             // 
             numPercent.Location = new Point(12, 226);
-            numPercent.Maximum = new decimal(new int[] { 100, 0, 0, 0 });
             numPercent.Minimum = new decimal(new int[] { 1, 0, 0, 0 });
             numPercent.Name = "numPercent";
             numPercent.Size = new Size(120, 23);
@@ -154,7 +152,7 @@
             lblTime.AutoSize = true;
             lblTime.Location = new Point(12, 262);
             lblTime.Name = "lblTime";
-            lblTime.Size = new Size(103, 15);
+            lblTime.Size = new Size(102, 15);
             lblTime.TabIndex = 10;
             lblTime.Text = "Tempo (minutos):";
             // 
@@ -175,7 +173,7 @@
             lblRotation.AutoSize = true;
             lblRotation.Location = new Point(12, 316);
             lblRotation.Name = "lblRotation";
-            lblRotation.Size = new Size(200, 15);
+            lblRotation.Size = new Size(218, 15);
             lblRotation.TabIndex = 12;
             lblRotation.Text = "Rotação de Núcleos (segundos/núcleo):";
             // 
@@ -184,7 +182,7 @@
             chkRotation.AutoSize = true;
             chkRotation.Location = new Point(12, 334);
             chkRotation.Name = "chkRotation";
-            chkRotation.Size = new Size(118, 19);
+            chkRotation.Size = new Size(103, 19);
             chkRotation.TabIndex = 13;
             chkRotation.Text = "Ativar Rotação";
             chkRotation.UseVisualStyleBackColor = true;
@@ -192,6 +190,7 @@
             // 
             // numRotationSeconds
             // 
+            numRotationSeconds.Enabled = false;
             numRotationSeconds.Location = new Point(136, 332);
             numRotationSeconds.Maximum = new decimal(new int[] { 3600, 0, 0, 0 });
             numRotationSeconds.Minimum = new decimal(new int[] { 1, 0, 0, 0 });
@@ -199,7 +198,6 @@
             numRotationSeconds.Size = new Size(76, 23);
             numRotationSeconds.TabIndex = 14;
             numRotationSeconds.Value = new decimal(new int[] { 10, 0, 0, 0 });
-            numRotationSeconds.Enabled = false;
             // 
             // btnStart
             // 
@@ -221,16 +219,6 @@
             btnStop.Text = "Parar";
             btnStop.UseVisualStyleBackColor = true;
             btnStop.Click += BtnStop_Click;
-            // 
-            // btnCompile
-            // 
-            btnCompile.Location = new Point(224, 370);
-            btnCompile.Name = "btnCompile";
-            btnCompile.Size = new Size(100, 35);
-            btnCompile.TabIndex = 19;
-            btnCompile.Text = "Compilar C";
-            btnCompile.UseVisualStyleBackColor = true;
-            btnCompile.Click += BtnCompile_Click;
             // 
             // txtStatus
             // 
@@ -258,7 +246,6 @@
             ClientSize = new Size(800, 417);
             Controls.Add(lblStatus);
             Controls.Add(txtStatus);
-            Controls.Add(btnCompile);
             Controls.Add(btnStop);
             Controls.Add(btnStart);
             Controls.Add(numRotationSeconds);
@@ -306,7 +293,6 @@
         private NumericUpDown numRotationSeconds;
         private Button btnStart;
         private Button btnStop;
-        private Button btnCompile;
         private RichTextBox txtStatus;
         private Label lblStatus;
     }
