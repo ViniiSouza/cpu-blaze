@@ -1,8 +1,9 @@
-#define _GNU_SOURCE
 #include <stdio.h> // para entrada/saída (ex.: printf)
 #include <stdlib.h> // para malloc, atoi, atof
 #include <string.h> // para manipular strings (strcmp, strtok)
-#include <time.h> // para nanosleep e clock_gettime
+#include <windows.h> // para threads e manipulação de eventos
+#include <process.h> // para CreateThread
+#include <io.h>
 
 // Função auxiliar para converter string para double, suportando tanto vírgula quanto ponto
 double parse_double(const char* str) {
@@ -18,34 +19,15 @@ double parse_double(const char* str) {
     return result;
 }
 
-#ifdef _WIN32
-    #include <windows.h> // para threads e manipulação de eventos
-    #include <process.h> // para CreateThread
-    #include <io.h>
-    typedef HANDLE thread_t;
-    typedef DWORD thread_return_t;
-    volatile int running = 1;
-    
-    BOOL WINAPI handle_ctrl_c(DWORD ctrl_type) {
-        if (ctrl_type == CTRL_C_EVENT) {
-            running = 0;
-            return TRUE;
-        }
-        return FALSE;
-    }
-#else
-    #include <signal.h>
-    #include <pthread.h>
-    #include <unistd.h>
-    #include <time.h>
-    typedef pthread_t thread_t;
-    typedef void* thread_return_t;
-    volatile sig_atomic_t running = 1;
-    
-    void handle_sigint(int sig) {
+volatile int running = 1;
+
+BOOL WINAPI handle_ctrl_c(DWORD ctrl_type) {
+    if (ctrl_type == CTRL_C_EVENT) {
         running = 0;
+        return TRUE;
     }
-#endif
+    return FALSE;
+}
 
 typedef struct {
     int core_id;
@@ -57,7 +39,6 @@ typedef struct {
     int rotation_seconds;
 } ThreadArg;
 
-#ifdef _WIN32
 typedef struct {
     HANDLE* threads;
     int* core_ids;
@@ -65,178 +46,77 @@ typedef struct {
     int num_cores;
     int rotation_seconds;
 } RotationArg;
-#else
-typedef struct {
-    pthread_t* threads;
-    int* core_ids;
-    int num_threads;
-    int num_cores;
-    int rotation_seconds;
-} RotationArg;
-#endif
 
-#ifdef _WIN32
-    DWORD WINAPI burn_thread(LPVOID arg) {
-        ThreadArg* t_arg = (ThreadArg*)arg;
-        int percent = t_arg->percent;
-        unsigned long long result = 0;
+DWORD WINAPI burn_thread(LPVOID arg) {
+    ThreadArg* t_arg = (ThreadArg*)arg;
+    int percent = t_arg->percent;
+    unsigned long long result = 0;
+    
+    while (running) {
+        LARGE_INTEGER freq, start, end;
+        QueryPerformanceFrequency(&freq);
+        QueryPerformanceCounter(&start);
         
-        while (running) {
-            LARGE_INTEGER freq, start, end;
-            QueryPerformanceFrequency(&freq);
-            QueryPerformanceCounter(&start);
-            
-            double cycle_ms = 100.0;
-            double work_ms = (percent / 100.0) * cycle_ms;
-            double elapsed_ms = 0.0;
-            
-            while (running && elapsed_ms < work_ms) {
-                for (int i = 0; i < 1000; i++) {
-                    result += 1 * 2;
-                }
-                QueryPerformanceCounter(&end);
-                elapsed_ms = ((double)(end.QuadPart - start.QuadPart) / freq.QuadPart) * 1000.0;
-            }
-            
-            double sleep_ms = cycle_ms - elapsed_ms;
-            if (sleep_ms > 0) {
-                Sleep((DWORD)sleep_ms);
-            }
-        }
-        return 0;
-    }
-#else
-    void* burn_thread(void* arg) {
-        ThreadArg* t_arg = (ThreadArg*)arg;
-        int percent = t_arg->percent;
-        unsigned long long result = 0;
+        double cycle_ms = 100.0;
+        double work_ms = (percent / 100.0) * cycle_ms;
+        double elapsed_ms = 0.0;
         
-        while (running) {
-            struct timespec start, end;
-            clock_gettime(CLOCK_MONOTONIC, &start);
-            
-            double cycle_ms = 100.0;
-            double work_ms = (percent / 100.0) * cycle_ms;
-            double elapsed_ms = 0.0;
-            
-            while (running && elapsed_ms < work_ms) {
-#if defined(__x86_64__)
-                __asm__ volatile (
-                    "movq $1, %%rax\n"
-                    "imulq $2, %%rax\n"
-                    "addq %%rax, %0"
-                    : "+r" (result)
-                    :
-                    : "rax"
-                );
-#elif defined(__aarch64__)
-                __asm__ volatile (
-                    "mov x0, #1\n"
-                    "mov x1, #2\n"
-                    "mul x0, x0, x1\n"
-                    "add %0, %0, x0"
-                    : "+r" (result)
-                    :
-                    : "x0", "x1"
-                );
-#else
+        while (running && elapsed_ms < work_ms) {
+            for (int i = 0; i < 1000; i++) {
                 result += 1 * 2;
-#endif
-                clock_gettime(CLOCK_MONOTONIC, &end);
-                elapsed_ms = (end.tv_sec - start.tv_sec) * 1000.0 + 
-                            (end.tv_nsec - start.tv_nsec) / 1000000.0;
             }
-            
-            double sleep_ms = cycle_ms - elapsed_ms;
-            if (sleep_ms > 0) {
-                struct timespec ts = {0, (long)(sleep_ms * 1000000)};
-                nanosleep(&ts, NULL);
-            }
+            QueryPerformanceCounter(&end);
+            elapsed_ms = ((double)(end.QuadPart - start.QuadPart) / freq.QuadPart) * 1000.0;
         }
-        return NULL;
+        
+        double sleep_ms = cycle_ms - elapsed_ms;
+        if (sleep_ms > 0) {
+            Sleep((DWORD)sleep_ms);
+        }
     }
-#endif
+    return 0;
+}
 
-#ifdef _WIN32
-    DWORD WINAPI timer_thread(LPVOID arg) {
-        double time_min = *(double*)arg;
-        double total_ms_double = time_min * 60.0 * 1000.0;
-        DWORD total_ms = (DWORD)total_ms_double;
-        
-        if (total_ms == 0 && total_ms_double > 0.5) {
-            // Se arredondou para 0 mas deveria ser maior, usar pelo menos 1ms
-            total_ms = 1;
-        }
-        
-        Sleep(total_ms);
-        running = 0;
-        return 0;
+DWORD WINAPI timer_thread(LPVOID arg) {
+    double time_min = *(double*)arg;
+    double total_ms_double = time_min * 60.0 * 1000.0;
+    DWORD total_ms = (DWORD)total_ms_double;
+    
+    if (total_ms == 0 && total_ms_double > 0.5) {
+        // Se arredondou para 0 mas deveria ser maior, usar pelo menos 1ms
+        total_ms = 1;
     }
+    
+    Sleep(total_ms);
+    running = 0;
+    return 0;
+}
 
-    DWORD WINAPI rotation_thread(LPVOID arg) {
-        RotationArg* rot_arg = (RotationArg*)arg;
-        int current_core_index = 0;
+DWORD WINAPI rotation_thread(LPVOID arg) {
+    RotationArg* rot_arg = (RotationArg*)arg;
+    int current_core_index = 0;
+    
+    while (running) {
+        Sleep(rot_arg->rotation_seconds * 1000);
+        if (!running) break;
         
-        while (running) {
-            Sleep(rot_arg->rotation_seconds * 1000);
-            if (!running) break;
-            
-            // Rotaciona para o próximo núcleo
-            int target_core = rot_arg->core_ids[current_core_index];
-            
-            for (int i = 0; i < rot_arg->num_threads; i++) {
-                if (rot_arg->threads[i]) {
-                    DWORD_PTR mask = (DWORD_PTR)(1ULL << target_core);
-                    SetThreadAffinityMask(rot_arg->threads[i], mask);
-                }
-            }
-            
-            current_core_index = (current_core_index + 1) % rot_arg->num_cores;
-        }
-        return 0;
-    }
-#else
-    void* timer_thread(void* arg) {
-        double time_min = *(double*)arg;
-        long seconds = (long)(time_min * 60);
-        long nanos = (long)((time_min * 60 - seconds) * 1000000000);
-        struct timespec ts = {seconds, nanos};
-        nanosleep(&ts, NULL);
-        running = 0;
-        return NULL;
-    }
-
-    void* rotation_thread(void* arg) {
-        RotationArg* rot_arg = (RotationArg*)arg;
-        int current_core_index = 0;
+        // Rotaciona para o próximo núcleo
+        int target_core = rot_arg->core_ids[current_core_index];
         
-        while (running) {
-            struct timespec ts = {rot_arg->rotation_seconds, 0};
-            nanosleep(&ts, NULL);
-            if (!running) break;
-            
-            // Rotaciona para o próximo núcleo
-            int target_core = rot_arg->core_ids[current_core_index];
-            
-            for (int i = 0; i < rot_arg->num_threads; i++) {
-                cpu_set_t cpuset;
-                CPU_ZERO(&cpuset);
-                CPU_SET(target_core, &cpuset);
-                pthread_setaffinity_np(rot_arg->threads[i], sizeof(cpuset), &cpuset);
+        for (int i = 0; i < rot_arg->num_threads; i++) {
+            if (rot_arg->threads[i]) {
+                DWORD_PTR mask = (DWORD_PTR)(1ULL << target_core);
+                SetThreadAffinityMask(rot_arg->threads[i], mask);
             }
-            
-            current_core_index = (current_core_index + 1) % rot_arg->num_cores;
         }
-        return NULL;
+        
+        current_core_index = (current_core_index + 1) % rot_arg->num_cores;
     }
-#endif
+    return 0;
+}
 
 int main(int argc, char* argv[]) {
-#ifdef _WIN32
     SetConsoleCtrlHandler(handle_ctrl_c, TRUE);
-#else
-    signal(SIGINT, handle_sigint);
-#endif
 
     int* cores = NULL;
     int num_cores = 0;
@@ -277,13 +157,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-#ifdef _WIN32
     SYSTEM_INFO sysInfo;
     GetSystemInfo(&sysInfo);
     int max_cores = sysInfo.dwNumberOfProcessors;
-#else
-    int max_cores = sysconf(_SC_NPROCESSORS_ONLN);
-#endif
 
     if (num_cores == 0) {
         num_cores = max_cores;
@@ -299,25 +175,16 @@ int main(int argc, char* argv[]) {
         }
     }
 
-#ifndef _WIN32
-    if (!mode_multi) {
-        printf("Nota: No macOS, a afinidade de núcleos não é garantida. O sistema distribuirá as threads.\n");
-    }
-#endif
-
     printf("Iniciando CPU burn: %d núcleos, %.2f minutos, %d%% uso, modo %s", 
            num_cores, time_min, percent, mode_multi ? "multi" : "single");
     if (rotation_seconds > 0) {
         printf(", rotação a cada %d segundos", rotation_seconds);
     }
+    printf(". Pressione Ctrl+C para parar.\n");
     fflush(stdout); // Forçar a saída imediata da mensagem
 
     int num_threads = num_cores;
-#ifdef _WIN32
     HANDLE* threads = malloc(sizeof(HANDLE) * num_threads);
-#else
-    pthread_t* threads = malloc(sizeof(pthread_t) * num_threads);
-#endif
     ThreadArg* args = malloc(sizeof(ThreadArg) * num_threads);
 
     int thread_percent = mode_multi ? (percent / num_cores) : percent;
@@ -330,7 +197,7 @@ int main(int argc, char* argv[]) {
         args[i].num_cores = num_cores;
         args[i].rotation_enabled = (rotation_seconds > 0) ? 1 : 0;
         args[i].rotation_seconds = rotation_seconds;
-#ifdef _WIN32
+        
         threads[i] = CreateThread(NULL, 0, burn_thread, &args[i], 0, NULL);
         if (rotation_seconds > 0) {
             // Com rotação, definir afinidade inicial para o primeiro núcleo
@@ -347,34 +214,8 @@ int main(int argc, char* argv[]) {
             }
             SetThreadAffinityMask(threads[i], mask);
         }
-#else
-        if (pthread_create(&threads[i], NULL, burn_thread, &args[i]) != 0) {
-            printf("Erro ao criar thread %d\n", i);
-        }
-        if (rotation_seconds > 0) {
-            // Com rotação, definir afinidade inicial para o primeiro núcleo
-            // A thread de rotação vai mudar depois
-            cpu_set_t cpuset;
-            CPU_ZERO(&cpuset);
-            CPU_SET(cores[0], &cpuset);
-            pthread_setaffinity_np(threads[i], sizeof(cpuset), &cpuset);
-        } else if (!mode_multi) {
-            cpu_set_t cpuset;
-            CPU_ZERO(&cpuset);
-            CPU_SET(cores[i], &cpuset);
-            pthread_setaffinity_np(threads[i], sizeof(cpuset), &cpuset);
-        } else {
-            cpu_set_t cpuset;
-            CPU_ZERO(&cpuset);
-            for (int j = 0; j < num_cores; j++) {
-                CPU_SET(cores[j], &cpuset);
-            }
-            pthread_setaffinity_np(threads[i], sizeof(cpuset), &cpuset);
-        }
-#endif
     }
 
-#ifdef _WIN32
     HANDLE timer = CreateThread(NULL, 0, timer_thread, &time_min, 0, NULL);
     HANDLE rotation = NULL;
     
@@ -417,50 +258,6 @@ int main(int argc, char* argv[]) {
         CloseHandle(rotation);
     }
     free(all_handles);
-#else
-    pthread_t timer;
-    pthread_create(&timer, NULL, timer_thread, &time_min);
-    
-    pthread_t rotation;
-    int rotation_created = 0;
-    
-    // Criar thread de rotação se necessário
-    if (rotation_seconds > 0 && num_cores > 1) {
-        RotationArg* rot_arg = malloc(sizeof(RotationArg));
-        rot_arg->threads = threads;
-        rot_arg->core_ids = cores;
-        rot_arg->num_threads = num_threads;
-        rot_arg->num_cores = num_cores;
-        rot_arg->rotation_seconds = rotation_seconds;
-        if (pthread_create(&rotation, NULL, rotation_thread, rot_arg) == 0) {
-            rotation_created = 1;
-        }
-    }
-    
-    void* retval;
-    while (running) {
-        int finished = 1;
-        for (int i = 0; i < num_threads; i++) {
-            if (pthread_tryjoin_np(threads[i], &retval) != 0) {
-                finished = 0;
-                break;
-            }
-        }
-        if (finished) break;
-        usleep(100000);
-    }
-    
-    for (int i = 0; i < num_threads; i++) {
-        if (!running) pthread_cancel(threads[i]);
-        pthread_join(threads[i], NULL);
-    }
-    if (timer) pthread_cancel(timer);
-    pthread_join(timer, NULL);
-    if (rotation_created) {
-        pthread_cancel(rotation);
-        pthread_join(rotation, NULL);
-    }
-#endif
 
     free(threads);
     free(args);

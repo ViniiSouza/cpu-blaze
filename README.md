@@ -41,7 +41,6 @@ A aplicação oferece as seguintes funcionalidades através de sua interface gr�
 - **Windows 10/11** (64-bit)
 - **.NET 8.0 Runtime** ou superior
 - **Visual Studio 2022** (para desenvolvimento) ou **Visual Studio Build Tools**
-- **GCC** (GNU Compiler Collection) - Opcional, para compilação do módulo C
 
 ### Hardware
 - Processador com múltiplos núcleos (recomendado)
@@ -60,19 +59,13 @@ A aplicação oferece as seguintes funcionalidades através de sua interface gr�
    - Inclua o workload "Desenvolvimento para desktop com .NET"
    - Inclua o componente "Windows Forms"
 
-3. **Instalar GCC** (opcional, para compilação automática)
-   - **MinGW-w64**: https://www.mingw-w64.org/
-   - **MSYS2**: https://www.msys2.org/
-   - Adicione o GCC ao PATH do sistema
-
 ### Compilação do Projeto
 
 #### Método 1: Visual Studio (Recomendado)
 
 1. Abra o arquivo `CpuBlazeInterface.slnx` no Visual Studio 2022
 2. Aguarde a restauração dos pacotes NuGet
-3. O projeto compilará automaticamente o módulo C (se o GCC estiver disponível)
-4. Pressione `F5` para executar ou `Ctrl+Shift+B` para compilar
+3. Pressione `F5` para executar ou `Ctrl+Shift+B` para compilar
 
 #### Método 2: Linha de Comando
 
@@ -100,16 +93,6 @@ dotnet publish -c Release -r win-x64 --self-contained false
 # CpuBlazeInterface/CpuBlazeInterface/bin/Release/net8.0-windows/win-x64/publish/
 ```
 
-### Compilação do Módulo C (Automática)
-
-O módulo C é compilado automaticamente durante o build do projeto se:
-- O GCC estiver disponível no PATH
-- O arquivo `cpu_blaze.c` estiver no diretório raiz do projeto
-
-**Nota**: Se a compilação automática falhar, você pode:
-- Usar o botão "Compilar C" na interface
-- Executar manualmente: `gcc cpu_blaze.c -o cpu_blaze_windows.exe -Wall`
-
 ## 💻 Como Executar
 
 ### Executando a Aplicação
@@ -120,7 +103,6 @@ O módulo C é compilado automaticamente durante o build do projeto se:
 2. **Pelo executável**:
    - Navegue até `CpuBlazeInterface/CpuBlazeInterface/bin/Debug/net8.0-windows/`
    - Execute `CpuBlazeInterface.exe`
-   - Certifique-se de que `cpu_blaze_windows.exe` está no mesmo diretório
 
 3. **Pela linha de comando**:
    ```bash
@@ -160,7 +142,6 @@ A interface é dividida em duas áreas principais:
 6. **Botões de Controle**
    - **Iniciar**: Inicia o teste de estresse
    - **Parar**: Interrompe o teste em execução
-   - **Compilar C**: Compila o módulo C manualmente (se necessário)
 
 #### Painel de Status (Direita)
 
@@ -203,16 +184,9 @@ cpu-blaze/
 │       ├── Form1.cs                # Interface principal
 │       ├── Form1.Designer.cs       # Design da interface
 │       ├── CpuBlazeRunner.cs       # Gerenciador de processos
-│       ├── CpuBlazeCompiler.cs    # Compilador do módulo C
+│       ├── CpuBlazeCompiler.cs    # Utilitário de compilação
 │       ├── Program.cs              # Ponto de entrada
 │       └── CpuBlazeInterface.csproj # Arquivo de projeto
-│
-├── cpu_blaze.c                     # Módulo C (processamento)
-├── cpu_blaze_windows.exe           # Executável compilado (gerado)
-│
-├── build_cpu_blaze.bat             # Script de compilação (Windows)
-├── build_cpu_blaze.ps1             # Script de compilação (PowerShell)
-├── build_cpu_blaze.sh              # Script de compilação (Linux/Mac)
 │
 └── README.md                        # Este arquivo
 ```
@@ -221,7 +195,6 @@ cpu-blaze/
 
 - **C# .NET 8.0**: Linguagem e framework principal
 - **Windows Forms**: Framework de interface gráfica
-- **C (GCC)**: Módulo de processamento de baixo nível
 - **MSBuild**: Sistema de build do .NET
 
 ## 📚 Conceitos de Sistemas Operacionais Demonstrados
@@ -233,7 +206,7 @@ Este projeto demonstra os seguintes conceitos:
 3. **Afinidade de Processador (CPU Affinity)**: Vinculação de threads a núcleos específicos
 4. **Sincronização**: Coordenação entre threads e processos
 5. **Gerenciamento de Recursos**: Controle de uso de CPU através de porcentagens
-6. **Comunicação Interprocesso**: Comunicação entre aplicação C# e módulo C
+6. **Comunicação Interprocesso**: Comunicação entre componentes da aplicação
 
 ## ⚠️ Considerações Importantes
 
@@ -243,26 +216,22 @@ Este projeto demonstra os seguintes conceitos:
 
 ## 🐛 Solução de Problemas
 
-### Executável não encontrado
-- Certifique-se de que `cpu_blaze_windows.exe` está no mesmo diretório da aplicação
-- Use o botão "Compilar C" para gerar o executável
-
-### GCC não encontrado
-- Instale o MinGW-w64 ou MSYS2
-- Adicione o GCC ao PATH do sistema
-- Reinicie o Visual Studio após adicionar ao PATH
-
 ### Erro ao iniciar processo
 - Verifique se não há outro processo de estresse em execução
-- Certifique-se de que o executável não está corrompido
-- Tente recompilar o módulo C
+- Certifique-se de que todos os arquivos necessários estão presentes
+- Tente recompilar o projeto
+
+### Aplicação não inicia
+- Verifique se o .NET 8.0 Runtime está instalado
+- Certifique-se de que está usando Windows 10/11
+- Verifique os logs de erro no Visual Studio
 
 ## 📝 Notas de Desenvolvimento
 
-- O módulo C é compilado automaticamente durante o build se o GCC estiver disponível
 - A interface detecta automaticamente o número de núcleos do processador
 - Os logs são exibidos em tempo real na interface
 - O processo pode ser interrompido a qualquer momento usando o botão "Parar"
+- A aplicação gerencia automaticamente os recursos necessários
 
 ## 👥 Autores
 
