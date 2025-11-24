@@ -72,22 +72,97 @@ namespace CpuBlazeInterface
 
         public void Stop()
         {
-            if (_process != null && !_process.HasExited)
+            if (_process == null)
+                return;
+
+            try
             {
+                if (_process.HasExited)
+                {
+                    CleanupProcess();
+                    return;
+                }
+
                 try
                 {
-                    _process.Kill();
-                    _process.WaitForExit(5000);
+                    if (!_process.HasExited)
+                    {
+                        _process.CloseMainWindow();
+                        if (!_process.WaitForExit(500))
+                        {
+                            _process.Kill();
+                        }
+                    }
                 }
-                catch (Exception ex)
+                catch (InvalidOperationException)
                 {
-                    OutputReceived?.Invoke(this, $"Erro ao parar processo: {ex.Message}");
+                    if (!_process.HasExited)
+                    {
+                        _process.Kill();
+                    }
                 }
-                finally
+
+                if (!_process.HasExited)
                 {
-                    _process?.Dispose();
-                    _process = null;
+                    _process.WaitForExit(3000);
                 }
+
+                if (!_process.HasExited)
+                {
+                    try
+                    {
+                        _process.Kill();
+                        _process.WaitForExit(2000);
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                OutputReceived?.Invoke(this, $"Erro ao parar processo: {ex.Message}");
+            }
+            finally
+            {
+                CleanupProcess();
+            }
+        }
+
+        private void CleanupProcess()
+        {
+            try
+            {
+                if (_process != null)
+                {
+                    if (!_process.HasExited)
+                    {
+                        try { _process.Kill(); } catch { }
+                    }
+
+                    try
+                    {
+                        _process.CancelOutputRead();
+                        _process.CancelErrorRead();
+                    }
+                    catch { }
+
+                    try
+                    {
+                        _process.Close();
+                    }
+                    catch { }
+
+                    try
+                    {
+                        _process.Dispose();
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            finally
+            {
+                _process = null;
+                ProcessExited?.Invoke(this, EventArgs.Empty);
             }
         }
 
@@ -135,5 +210,3 @@ namespace CpuBlazeInterface
         public int RotationSeconds { get; set; } = 0; // 0 = sem rotação
     }
 }
-
-

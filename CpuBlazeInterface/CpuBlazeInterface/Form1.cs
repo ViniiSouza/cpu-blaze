@@ -176,9 +176,106 @@ namespace CpuBlazeInterface
             if (_runner != null && _runner.IsRunning)
             {
                 AppendStatus("\n=== Parando processo ===");
-                _runner.Stop();
-                AppendStatus("Processo parado.");
+                btnStop.Enabled = false;
+                
+                try
+                {
+                    _runner.Stop();
+                    AppendStatus("Processo parado.");
+                }
+                catch (Exception ex)
+                {
+                    AppendStatus($"Erro ao parar: {ex.Message}");
+                }
+                finally
+                {
+                    btnStart.Enabled = true;
+                    btnStop.Enabled = false;
+                }
             }
+        }
+
+        private void BtnCompile_Click(object sender, EventArgs e)
+        {
+            btnCompile.Enabled = false;
+            AppendStatus("\n=== Compilando código C ===");
+
+            string? sourceDir = FindSourceDirectory();
+            if (sourceDir == null)
+            {
+                AppendStatus("ERRO: Não foi possível encontrar o diretório do arquivo cpu_blaze.c");
+                btnCompile.Enabled = true;
+                return;
+            }
+
+            Task.Run(() =>
+            {
+                bool success = CpuBlazeCompiler.Compile(sourceDir, sourceDir, (message) =>
+                {
+                    if (InvokeRequired)
+                    {
+                        Invoke(new Action(() => AppendStatus(message)));
+                    }
+                    else
+                    {
+                        AppendStatus(message);
+                    }
+                });
+
+                if (InvokeRequired)
+                {
+                    Invoke(new Action(() =>
+                    {
+                        if (success)
+                        {
+                            AppendStatus("=== Compilação concluída ===");
+                            string? exePath = FindExecutable();
+                            if (exePath != null)
+                            {
+                                _runner = new CpuBlazeRunner(exePath);
+                                _runner.OutputReceived += Runner_OutputReceived;
+                                _runner.ProcessExited += Runner_ProcessExited;
+                                AppendStatus($"Executável encontrado: {exePath}");
+                                btnStart.Enabled = true;
+                            }
+                        }
+                        btnCompile.Enabled = true;
+                    }));
+                }
+                else
+                {
+                    if (success)
+                    {
+                        AppendStatus("=== Compilação concluída ===");
+                        string? exePath = FindExecutable();
+                        if (exePath != null)
+                        {
+                            _runner = new CpuBlazeRunner(exePath);
+                            _runner.OutputReceived += Runner_OutputReceived;
+                            _runner.ProcessExited += Runner_ProcessExited;
+                            AppendStatus($"Executável encontrado: {exePath}");
+                            btnStart.Enabled = true;
+                        }
+                    }
+                    btnCompile.Enabled = true;
+                }
+            });
+        }
+
+        private string? FindSourceDirectory()
+        {
+            string appDir = Application.StartupPath;
+            DirectoryInfo? currentDir = new DirectoryInfo(appDir);
+            
+            for (int i = 0; i < 5 && currentDir != null; i++)
+            {
+                string sourcePath = Path.Combine(currentDir.FullName, "cpu_blaze.c");
+                if (File.Exists(sourcePath))
+                    return currentDir.FullName;
+                currentDir = currentDir.Parent;
+            }
+
+            return null;
         }
 
         private void Runner_OutputReceived(object? sender, string output)
