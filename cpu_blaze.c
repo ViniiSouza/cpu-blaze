@@ -180,7 +180,6 @@ int main(int argc, char* argv[]) {
     if (rotation_seconds > 0) {
         printf(", rotação a cada %d segundos", rotation_seconds);
     }
-    printf(". Pressione Ctrl+C para parar.\n");
     fflush(stdout); // Forçar a saída imediata da mensagem
 
     int num_threads = num_cores;
